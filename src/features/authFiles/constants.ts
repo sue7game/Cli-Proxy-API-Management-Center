@@ -204,6 +204,7 @@ export const parseDisableCoolingValue = (value: unknown): boolean | undefined =>
   if (!normalized) return undefined;
   if (TRUTHY_TEXT_VALUES.has(normalized)) return true;
   if (FALSY_TEXT_VALUES.has(normalized)) return false;
+  if (INTEGER_STRING_PATTERN.test(normalized)) return Number(normalized) !== 0;
   return undefined;
 };
 

@@ -7,6 +7,8 @@ import {
   IconDownload,
   IconInfo,
   IconModelCluster,
+  IconRefreshCw,
+  IconScrollText,
   IconSettings,
   IconTrash2,
 } from '@/components/ui/icons';
@@ -38,6 +40,18 @@ import styles from '@/pages/AuthFilesPage.module.scss';
 
 const HEALTHY_STATUS_MESSAGES = new Set(['ok', 'healthy', 'ready', 'success', 'available']);
 
+const formatAuto429DateTime = (value: unknown): string => {
+  if (typeof value !== 'string' || !value.trim()) return '';
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) return '';
+  return new Intl.DateTimeFormat(undefined, {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(timestamp));
+};
+
 export type AuthFileCardProps = {
   file: AuthFileItem;
   compact: boolean;
@@ -46,6 +60,7 @@ export type AuthFileCardProps = {
   disableControls: boolean;
   deleting: string | null;
   statusUpdating: Record<string, boolean>;
+  auto429Probing: Record<string, boolean>;
   quotaFilterType: QuotaProviderType | null;
   statusBarCache: Map<string, AuthFileStatusBarData>;
   onShowModels: (file: AuthFileItem) => void;
@@ -53,6 +68,8 @@ export type AuthFileCardProps = {
   onOpenPrefixProxyEditor: (file: AuthFileItem) => void;
   onDelete: (name: string) => void;
   onToggleStatus: (file: AuthFileItem, enabled: boolean) => void;
+  onAuto429Probe: (file: AuthFileItem) => void;
+  onShowAuto429Events: (file: AuthFileItem) => void;
   onToggleSelect: (name: string) => void;
 };
 
@@ -72,6 +89,7 @@ export function AuthFileCard(props: AuthFileCardProps) {
     disableControls,
     deleting,
     statusUpdating,
+    auto429Probing,
     quotaFilterType,
     statusBarCache,
     onShowModels,
@@ -79,6 +97,8 @@ export function AuthFileCard(props: AuthFileCardProps) {
     onOpenPrefixProxyEditor,
     onDelete,
     onToggleStatus,
+    onAuto429Probe,
+    onShowAuto429Events,
     onToggleSelect,
   } = props;
 
@@ -122,6 +142,16 @@ export function AuthFileCard(props: AuthFileCardProps) {
     Boolean(rawStatusMessage) && !HEALTHY_STATUS_MESSAGES.has(rawStatusMessage.toLowerCase());
 
   const priorityValue = parsePriorityValue(file.priority ?? file['priority']);
+  const auto429Threshold = parsePriorityValue(file.auto_disable_429_threshold);
+  const auto429Count = parsePriorityValue(file.auto_429_count) ?? 0;
+  const auto429Enabled = auto429Threshold !== undefined && auto429Threshold > 0;
+  const auto429RuntimeDisabled = file.auto_disabled_by_429 === true;
+  const hasAuto429Events =
+    auto429RuntimeDisabled ||
+    file.has_auto_429_events === true ||
+    ((parsePriorityValue(file.auto_429_event_count) ?? 0) > 0);
+  const auto429NextRecheck = formatAuto429DateTime(file.next_auto_429_recheck_at);
+  const showAuto429Status = auto429Enabled || auto429RuntimeDisabled || auto429Count > 0;
   const noteValue = typeof file.note === 'string' ? file.note.trim() : '';
   const stateLabel = isRuntimeOnly
     ? t('auth_files.type_virtual') || '虚拟认证文件'
@@ -217,6 +247,27 @@ export function AuthFileCard(props: AuthFileCardProps) {
                 <span className={`${styles.metaValue} ${styles.priorityValue}`}>
                   {priorityValue}
                 </span>
+              </div>
+            )}
+            {showAuto429Status && (
+              <div
+                className={`${styles.metaItem} ${auto429RuntimeDisabled ? styles.priorityBadge : ''}`}
+              >
+                <span className={styles.metaLabel}>{t('auth_files.auto_429_display')}</span>
+                <span className={styles.metaValue}>
+                  {auto429RuntimeDisabled
+                    ? t('auth_files.auto_429_disabled_value', {
+                        count: auto429Count,
+                        threshold: auto429Threshold ?? '-',
+                      })
+                    : `${auto429Count}/${auto429Threshold ?? '-'}`}
+                </span>
+              </div>
+            )}
+            {auto429RuntimeDisabled && auto429NextRecheck && (
+              <div className={styles.metaItem}>
+                <span className={styles.metaLabel}>{t('auth_files.auto_429_next_recheck')}</span>
+                <span className={styles.metaValue}>{auto429NextRecheck}</span>
               </div>
             )}
           </div>
@@ -317,16 +368,50 @@ export function AuthFileCard(props: AuthFileCardProps) {
               )}
             </div>
             {!isRuntimeOnly && (
-              <div className={styles.statusToggle}>
-                <span className={styles.statusToggleLabel}>
-                  {t('auth_files.status_toggle_label')}
-                </span>
-                <ToggleSwitch
-                  ariaLabel={t('auth_files.status_toggle_label')}
-                  checked={!file.disabled}
-                  disabled={disableControls || statusUpdating[file.name] === true}
-                  onChange={(value) => onToggleStatus(file, value)}
-                />
+              <div className={styles.statusToggleGroup}>
+                {auto429RuntimeDisabled && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onAuto429Probe(file)}
+                    className={`${styles.auto429ProbeButton} ${styles.iconButton}`}
+                    title={t('auth_files.auto_429_probe_button')}
+                    disabled={
+                      disableControls ||
+                      statusUpdating[file.name] === true ||
+                      auto429Probing[file.name] === true
+                    }
+                  >
+                    {auto429Probing[file.name] === true ? (
+                      <LoadingSpinner size={14} />
+                    ) : (
+                      <IconRefreshCw className={styles.actionIcon} size={16} />
+                    )}
+                  </Button>
+                )}
+                {hasAuto429Events && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => onShowAuto429Events(file)}
+                    className={`${styles.auto429EventsButton} ${styles.iconButton}`}
+                    title={t('auth_files.auto_429_events_button')}
+                    disabled={disableControls}
+                  >
+                    <IconScrollText className={styles.actionIcon} size={16} />
+                  </Button>
+                )}
+                <div className={styles.statusToggle}>
+                  <span className={styles.statusToggleLabel}>
+                    {t('auth_files.status_toggle_label')}
+                  </span>
+                  <ToggleSwitch
+                    ariaLabel={t('auth_files.status_toggle_label')}
+                    checked={!file.disabled}
+                    disabled={disableControls || statusUpdating[file.name] === true}
+                    onChange={(value) => onToggleStatus(file, value)}
+                  />
+                </div>
               </div>
             )}
           </div>

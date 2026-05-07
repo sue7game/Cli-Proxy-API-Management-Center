@@ -40,6 +40,7 @@ import {
   type ResolvedTheme,
 } from '@/features/authFiles/constants';
 import { AuthFileCard } from '@/features/authFiles/components/AuthFileCard';
+import { AuthFileAuto429EventsModal } from '@/features/authFiles/components/AuthFileAuto429EventsModal';
 import { AuthFileModelsModal } from '@/features/authFiles/components/AuthFileModelsModal';
 import { AuthFilesPrefixProxyEditorModal } from '@/features/authFiles/components/AuthFilesPrefixProxyEditorModal';
 import { OAuthExcludedCard } from '@/features/authFiles/components/OAuthExcludedCard';
@@ -58,6 +59,8 @@ import {
   type AuthFilesSortMode,
 } from '@/features/authFiles/uiState';
 import { useAuthStore, useNotificationStore, useThemeStore } from '@/stores';
+import { authFilesApi } from '@/services/api';
+import type { AuthFileAuto429Event, AuthFileItem } from '@/types/authFile';
 import styles from './AuthFilesPage.module.scss';
 
 const easePower3Out = (progress: number) => 1 - (1 - progress) ** 4;
@@ -100,8 +103,20 @@ export function AuthFilesPage() {
   const [sortMode, setSortMode] = useState<AuthFilesSortMode>('default');
   const [batchActionBarVisible, setBatchActionBarVisible] = useState(false);
   const [uiStateHydrated, setUiStateHydrated] = useState(false);
+  const [auto429EventsModal, setAuto429EventsModal] = useState<{
+    open: boolean;
+    fileName: string;
+    loading: boolean;
+    events: AuthFileAuto429Event[];
+  }>({
+    open: false,
+    fileName: '',
+    loading: false,
+    events: [],
+  });
   const floatingBatchActionsRef = useRef<HTMLDivElement>(null);
   const batchActionAnimationRef = useRef<AnimationPlaybackControlsWithThen | null>(null);
+  const auto429EventsRequestRef = useRef(0);
   const previousSelectionCountRef = useRef(0);
   const selectionCountRef = useRef(0);
 
@@ -115,6 +130,7 @@ export function AuthFilesPage() {
     deleting,
     deletingAll,
     statusUpdating,
+    auto429Probing,
     batchStatusUpdating,
     fileInputRef,
     loadFiles,
@@ -124,6 +140,7 @@ export function AuthFilesPage() {
     handleDeleteAll,
     handleDownload,
     handleStatusToggle,
+    handleAuto429Probe,
     toggleSelect,
     selectAllVisible,
     invertVisibleSelection,
@@ -134,6 +151,44 @@ export function AuthFilesPage() {
   } = useAuthFilesData();
 
   const statusBarCache = useAuthFilesStatusBarCache(files);
+
+  const closeAuto429EventsModal = useCallback(() => {
+    auto429EventsRequestRef.current += 1;
+    setAuto429EventsModal((prev) => ({ ...prev, open: false }));
+  }, []);
+
+  const showAuto429Events = useCallback(
+    async (file: AuthFileItem) => {
+      const requestId = auto429EventsRequestRef.current + 1;
+      auto429EventsRequestRef.current = requestId;
+      setAuto429EventsModal({
+        open: true,
+        fileName: file.name,
+        loading: true,
+        events: [],
+      });
+      try {
+        const response = await authFilesApi.getAuto429Events(file.name);
+        if (auto429EventsRequestRef.current !== requestId) return;
+        setAuto429EventsModal({
+          open: true,
+          fileName: file.name,
+          loading: false,
+          events: response.events || [],
+        });
+      } catch (err: unknown) {
+        if (auto429EventsRequestRef.current !== requestId) return;
+        const errorMessage = err instanceof Error ? err.message : '';
+        showNotification(`${t('notification.update_failed')}: ${errorMessage}`, 'error');
+        setAuto429EventsModal((prev) => ({
+          ...prev,
+          loading: false,
+          events: [],
+        }));
+      }
+    },
+    [showNotification, t]
+  );
 
   const {
     excluded,
@@ -825,6 +880,7 @@ export function AuthFilesPage() {
                     disableControls={disableControls}
                     deleting={deleting}
                     statusUpdating={statusUpdating}
+                    auto429Probing={auto429Probing}
                     quotaFilterType={quotaFilterType}
                     statusBarCache={statusBarCache}
                     onShowModels={showModels}
@@ -832,6 +888,8 @@ export function AuthFilesPage() {
                     onOpenPrefixProxyEditor={openPrefixProxyEditor}
                     onDelete={handleDelete}
                     onToggleStatus={handleStatusToggle}
+                    onAuto429Probe={handleAuto429Probe}
+                    onShowAuto429Events={showAuto429Events}
                     onToggleSelect={toggleSelect}
                   />
                 ))}
@@ -905,6 +963,14 @@ export function AuthFilesPage() {
         excluded={excluded}
         onClose={closeModelsModal}
         onCopyText={copyTextWithNotification}
+      />
+
+      <AuthFileAuto429EventsModal
+        open={auto429EventsModal.open}
+        fileName={auto429EventsModal.fileName}
+        loading={auto429EventsModal.loading}
+        events={auto429EventsModal.events}
+        onClose={closeAuto429EventsModal}
       />
 
       <AuthFilesPrefixProxyEditorModal

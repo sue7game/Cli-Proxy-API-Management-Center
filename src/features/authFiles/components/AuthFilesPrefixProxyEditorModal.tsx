@@ -69,7 +69,11 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
               editor?.saving === true ||
               !dirty ||
               !editor?.json ||
-              Boolean(editor?.headersTouched && editor.headersError)
+              Boolean(
+                (editor?.headersTouched && editor.headersError) ||
+                  editor?.disableCoolingError ||
+                  editor?.auto429Error
+              )
             }
           >
             {t('common.save')}
@@ -130,6 +134,35 @@ export function AuthFilesPrefixProxyEditorModal(props: AuthFilesPrefixProxyEdito
                   hint={t('auth_files.priority_hint')}
                   disabled={disableControls || editor.saving || !editor.json}
                   onChange={(e) => onChange('priority', e.target.value)}
+                />
+                <Input
+                  label={t('auth_files.disable_cooling_label')}
+                  value={editor.disableCooling}
+                  placeholder={t('auth_files.disable_cooling_placeholder')}
+                  hint={t('auth_files.disable_cooling_hint')}
+                  error={editor.disableCoolingError ?? undefined}
+                  disabled={disableControls || editor.saving || !editor.json}
+                  onChange={(e) => onChange('disableCooling', e.target.value)}
+                />
+                <Input
+                  type="number"
+                  label={t('auth_files.auto_disable_429_threshold_label')}
+                  value={editor.autoDisable429Threshold}
+                  placeholder={t('auth_files.auto_disable_429_threshold_placeholder')}
+                  hint={t('auth_files.auto_disable_429_threshold_hint')}
+                  error={editor.auto429Error ?? undefined}
+                  disabled={disableControls || editor.saving || !editor.json}
+                  onChange={(e) => onChange('autoDisable429Threshold', e.target.value)}
+                />
+                <Input
+                  type="number"
+                  label={t('auth_files.auto_429_recheck_interval_label')}
+                  value={editor.auto429RecheckInterval}
+                  placeholder={t('auth_files.auto_429_recheck_interval_placeholder')}
+                  hint={t('auth_files.auto_429_recheck_interval_hint')}
+                  error={editor.auto429Error ?? undefined}
+                  disabled={disableControls || editor.saving || !editor.json}
+                  onChange={(e) => onChange('auto429RecheckInterval', e.target.value)}
                 />
                 <div className="form-group">
                   <label>{t('auth_files.headers_label')}</label>

@@ -3,15 +3,27 @@ import { useTranslation } from 'react-i18next';
 import { authFilesApi, type AuthFileFieldsPatch } from '@/services/api';
 import type { AuthFileItem } from '@/types';
 import { useNotificationStore } from '@/stores';
-import { parsePriorityValue } from '@/features/authFiles/constants';
+import { parseDisableCoolingValue, parsePriorityValue } from '@/features/authFiles/constants';
 
 type AuthFileHeaders = Record<string, string>;
 type AuthFileHeadersErrorKey =
   | 'auth_files.headers_invalid_json'
   | 'auth_files.headers_invalid_object'
   | 'auth_files.headers_invalid_value';
+type PrefixProxyEditorErrorKey =
+  | AuthFileHeadersErrorKey
+  | 'auth_files.auto_429_invalid_integer'
+  | 'auth_files.disable_cooling_invalid_bool';
 
-export type PrefixProxyEditorField = 'prefix' | 'proxyUrl' | 'priority' | 'note' | 'headersText';
+export type PrefixProxyEditorField =
+  | 'prefix'
+  | 'proxyUrl'
+  | 'priority'
+  | 'disableCooling'
+  | 'note'
+  | 'headersText'
+  | 'autoDisable429Threshold'
+  | 'auto429RecheckInterval';
 
 export type PrefixProxyEditorFieldValue = string;
 
@@ -27,6 +39,11 @@ export type PrefixProxyEditorState = {
   prefix: string;
   proxyUrl: string;
   priority: string;
+  disableCooling: string;
+  disableCoolingError: string | null;
+  autoDisable429Threshold: string;
+  auto429RecheckInterval: string;
+  auto429Error: string | null;
   note: string;
   noteTouched: boolean;
   headersText: string;
@@ -89,6 +106,94 @@ const parseHeadersText = (
 
 const normalizeTextField = (value: unknown): string =>
   typeof value === 'string' ? value.trim() : '';
+
+const readDisableCoolingValue = (value: Record<string, unknown>): boolean | undefined =>
+  parseDisableCoolingValue(value.disable_cooling ?? value['disable-cooling']);
+
+const normalizeDisableCoolingText = (value: Record<string, unknown>): string => {
+  const parsed = readDisableCoolingValue(value);
+  return parsed === undefined ? '' : String(parsed);
+};
+
+const normalizeIntegerField = (value: unknown, fallback: number): number => {
+  const parsed = parsePriorityValue(value);
+  return parsed !== undefined ? parsed : fallback;
+};
+
+const normalizeAuto429Threshold = (value: unknown): number => {
+  const parsed = normalizeIntegerField(value, 0);
+  return parsed > 0 ? parsed : 0;
+};
+
+const normalizeAuto429RecheckInterval = (value: unknown): number => {
+  const parsed = normalizeIntegerField(value, 600);
+  return parsed > 0 ? parsed : 600;
+};
+
+const parseIntegerInput = (
+  text: string,
+  fallback: number,
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
+): number => {
+  const trimmed = text.trim();
+  if (!trimmed) return fallback;
+  const parsed = parsePriorityValue(trimmed);
+  if (parsed === undefined) {
+    throw new Error(resolveError('auth_files.auto_429_invalid_integer'));
+  }
+  return parsed;
+};
+
+const parseAuto429ThresholdInput = (
+  text: string,
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
+): number => {
+  const parsed = parseIntegerInput(text, 0, resolveError);
+  return parsed > 0 ? parsed : 0;
+};
+
+const parseAuto429RecheckIntervalInput = (
+  text: string,
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
+): number => {
+  const parsed = parseIntegerInput(text, 600, resolveError);
+  return parsed > 0 ? parsed : 600;
+};
+
+const validateIntegerInput = (
+  text: string,
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
+): string | null => {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  return parsePriorityValue(trimmed) === undefined
+    ? resolveError('auth_files.auto_429_invalid_integer')
+    : null;
+};
+
+const parseDisableCoolingInput = (
+  text: string,
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
+): boolean | undefined => {
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+  const parsed = parseDisableCoolingValue(trimmed);
+  if (parsed === undefined) {
+    throw new Error(resolveError('auth_files.disable_cooling_invalid_bool'));
+  }
+  return parsed;
+};
+
+const validateDisableCoolingInput = (
+  text: string,
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
+): string | null => {
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  return parseDisableCoolingValue(trimmed) === undefined
+    ? resolveError('auth_files.disable_cooling_invalid_bool')
+    : null;
+};
 
 const hasKeys = (value: Record<string, unknown> | AuthFileFieldsPatch | null): boolean =>
   Boolean(value && Object.keys(value).length > 0);
@@ -155,7 +260,7 @@ const applyHeadersPatch = (
 
 const buildAuthFileFieldsPatch = (
   editor: PrefixProxyEditorState,
-  resolveHeadersError: (key: AuthFileHeadersErrorKey) => string
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
 ): AuthFileFieldsPatch => {
   const original = editor.json ?? {};
   const patch: AuthFileFieldsPatch = {};
@@ -189,6 +294,12 @@ const buildAuthFileFieldsPatch = (
     }
   }
 
+  const originalDisableCooling = readDisableCoolingValue(original);
+  const nextDisableCooling = parseDisableCoolingInput(editor.disableCooling, resolveError);
+  if (nextDisableCooling !== undefined && nextDisableCooling !== originalDisableCooling) {
+    patch.disable_cooling = nextDisableCooling;
+  }
+
   if (editor.noteTouched) {
     const originalNote = normalizeTextField(original.note);
     const nextNote = editor.note.trim();
@@ -200,7 +311,7 @@ const buildAuthFileFieldsPatch = (
   if (editor.headersTouched) {
     const { value: parsedHeaders, errorKey } = parseHeadersText(editor.headersText);
     if (errorKey) {
-      throw new Error(resolveHeadersError(errorKey));
+      throw new Error(resolveError(errorKey));
     }
     const headersPatch = buildHeadersPatch(
       normalizeHeaders(original.headers),
@@ -211,15 +322,32 @@ const buildAuthFileFieldsPatch = (
     }
   }
 
+  const originalThreshold = normalizeAuto429Threshold(original.auto_disable_429_threshold);
+  const nextThreshold = parseAuto429ThresholdInput(editor.autoDisable429Threshold, resolveError);
+  if (nextThreshold !== originalThreshold) {
+    patch.auto_disable_429_threshold = nextThreshold;
+  }
+
+  const originalRecheckInterval = normalizeAuto429RecheckInterval(
+    original.auto_429_recheck_interval
+  );
+  const nextRecheckInterval = parseAuto429RecheckIntervalInput(
+    editor.auto429RecheckInterval,
+    resolveError
+  );
+  if (nextRecheckInterval !== originalRecheckInterval) {
+    patch.auto_429_recheck_interval = nextRecheckInterval;
+  }
+
   return patch;
 };
 
 const buildPrefixProxyUpdatedText = (
   editor: PrefixProxyEditorState | null,
-  resolveHeadersError: (key: AuthFileHeadersErrorKey) => string
+  resolveError: (key: PrefixProxyEditorErrorKey) => string
 ): string => {
   if (!editor?.json) return editor?.rawText ?? '';
-  const patch = buildAuthFileFieldsPatch(editor, resolveHeadersError);
+  const patch = buildAuthFileFieldsPatch(editor, resolveError);
   const next: Record<string, unknown> = { ...editor.json };
   if (patch.prefix !== undefined) {
     if (patch.prefix) {
@@ -244,6 +372,11 @@ const buildPrefixProxyUpdatedText = (
     }
   }
 
+  if (patch.disable_cooling !== undefined) {
+    next.disable_cooling = patch.disable_cooling;
+    delete next['disable-cooling'];
+  }
+
   if (patch.note !== undefined) {
     if (patch.note) {
       next.note = patch.note;
@@ -253,6 +386,12 @@ const buildPrefixProxyUpdatedText = (
   }
 
   applyHeadersPatch(next, patch.headers);
+  if (patch.auto_disable_429_threshold !== undefined) {
+    next.auto_disable_429_threshold = patch.auto_disable_429_threshold;
+  }
+  if (patch.auto_429_recheck_interval !== undefined) {
+    next.auto_429_recheck_interval = patch.auto_429_recheck_interval;
+  }
 
   return JSON.stringify(next);
 };
@@ -267,7 +406,9 @@ export function useAuthFilesPrefixProxyEditor(
   const [prefixProxyEditor, setPrefixProxyEditor] = useState<PrefixProxyEditorState | null>(null);
 
   const hasBlockingValidationError = Boolean(
-    prefixProxyEditor?.headersTouched && prefixProxyEditor.headersError
+    (prefixProxyEditor?.headersTouched && prefixProxyEditor.headersError) ||
+    prefixProxyEditor?.disableCoolingError ||
+    prefixProxyEditor?.auto429Error
   );
   const prefixProxyUpdatedText =
     prefixProxyEditor?.json && !hasBlockingValidationError
@@ -306,6 +447,11 @@ export function useAuthFilesPrefixProxyEditor(
       prefix: '',
       proxyUrl: '',
       priority: '',
+      disableCooling: '',
+      disableCoolingError: null,
+      autoDisable429Threshold: '0',
+      auto429RecheckInterval: '600',
+      auto429Error: null,
       note: '',
       noteTouched: false,
       headersText: '',
@@ -353,6 +499,11 @@ export function useAuthFilesPrefixProxyEditor(
       const prefix = typeof json.prefix === 'string' ? json.prefix : '';
       const proxyUrl = typeof json.proxy_url === 'string' ? json.proxy_url : '';
       const priority = parsePriorityValue(json.priority);
+      const disableCooling = normalizeDisableCoolingText(json);
+      const autoDisable429Threshold = normalizeAuto429Threshold(json.auto_disable_429_threshold);
+      const auto429RecheckInterval = normalizeAuto429RecheckInterval(
+        json.auto_429_recheck_interval
+      );
       const note = typeof json.note === 'string' ? json.note : '';
       const headers = json.headers;
       let headersText = '';
@@ -374,6 +525,11 @@ export function useAuthFilesPrefixProxyEditor(
           prefix,
           proxyUrl,
           priority: priority !== undefined ? String(priority) : '',
+          disableCooling,
+          disableCoolingError: null,
+          autoDisable429Threshold: String(autoDisable429Threshold),
+          auto429RecheckInterval: String(auto429RecheckInterval),
+          auto429Error: null,
           note,
           noteTouched: false,
           headersText,
@@ -401,6 +557,34 @@ export function useAuthFilesPrefixProxyEditor(
       if (field === 'prefix') return { ...prev, prefix: String(value) };
       if (field === 'proxyUrl') return { ...prev, proxyUrl: String(value) };
       if (field === 'priority') return { ...prev, priority: String(value) };
+      if (field === 'disableCooling') {
+        const nextValue = String(value);
+        return {
+          ...prev,
+          disableCooling: nextValue,
+          disableCoolingError: validateDisableCoolingInput(nextValue, (key) => t(key)),
+        };
+      }
+      if (field === 'autoDisable429Threshold') {
+        const nextValue = String(value);
+        return {
+          ...prev,
+          autoDisable429Threshold: nextValue,
+          auto429Error:
+            validateIntegerInput(nextValue, (key) => t(key)) ??
+            validateIntegerInput(prev.auto429RecheckInterval, (key) => t(key)),
+        };
+      }
+      if (field === 'auto429RecheckInterval') {
+        const nextValue = String(value);
+        return {
+          ...prev,
+          auto429RecheckInterval: nextValue,
+          auto429Error:
+            validateIntegerInput(prev.autoDisable429Threshold, (key) => t(key)) ??
+            validateIntegerInput(nextValue, (key) => t(key)),
+        };
+      }
       if (field === 'note') return { ...prev, note: String(value), noteTouched: true };
       if (field === 'headersText') {
         const headersText = String(value);

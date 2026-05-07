@@ -32,6 +32,7 @@ export type UseAuthFilesDataResult = {
   deleting: string | null;
   deletingAll: boolean;
   statusUpdating: Record<string, boolean>;
+  auto429Probing: Record<string, boolean>;
   batchStatusUpdating: boolean;
   fileInputRef: RefObject<HTMLInputElement | null>;
   loadFiles: () => Promise<void>;
@@ -41,6 +42,7 @@ export type UseAuthFilesDataResult = {
   handleDeleteAll: (options: DeleteAllOptions) => void;
   handleDownload: (name: string) => Promise<void>;
   handleStatusToggle: (item: AuthFileItem, enabled: boolean) => Promise<void>;
+  handleAuto429Probe: (item: AuthFileItem) => Promise<void>;
   toggleSelect: (name: string) => void;
   selectAllVisible: (visibleFiles: AuthFileItem[]) => void;
   invertVisibleSelection: (visibleFiles: AuthFileItem[]) => void;
@@ -61,6 +63,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
   const [deleting, setDeleting] = useState<string | null>(null);
   const [deletingAll, setDeletingAll] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState<Record<string, boolean>>({});
+  const [auto429Probing, setAuto429Probing] = useState<Record<string, boolean>>({});
   const [batchStatusUpdating, setBatchStatusUpdating] = useState(false);
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
 
@@ -551,6 +554,46 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     [deselectAll, files, showNotification, statusUpdating, t]
   );
 
+  const handleAuto429Probe = useCallback(
+    async (item: AuthFileItem) => {
+      const name = item.name;
+      if (!name || auto429Probing[name] === true) return;
+
+      setAuto429Probing((prev) => ({ ...prev, [name]: true }));
+      try {
+        const result = await authFilesApi.probeAuto429(name);
+        await loadFiles();
+        if (result.restored) {
+          showNotification(t('auth_files.auto_429_probe_restored', { name }), 'success');
+          return;
+        }
+        const status = result.auto_429_probe_status;
+        if (status === 429) {
+          showNotification(t('auth_files.auto_429_probe_still_429', { name }), 'warning');
+          return;
+        }
+        showNotification(
+          t('auth_files.auto_429_probe_failed', {
+            name,
+            status: status || '-',
+          }),
+          'warning'
+        );
+      } catch (err: unknown) {
+        const errorMessage = err instanceof Error ? err.message : '';
+        showNotification(`${t('notification.update_failed')}: ${errorMessage}`, 'error');
+      } finally {
+        setAuto429Probing((prev) => {
+          if (!prev[name]) return prev;
+          const next = { ...prev };
+          delete next[name];
+          return next;
+        });
+      }
+    },
+    [auto429Probing, loadFiles, showNotification, t]
+  );
+
   const batchDownload = useCallback(
     async (names: string[]) => {
       const uniqueNames = Array.from(new Set(names));
@@ -638,6 +681,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     deleting,
     deletingAll,
     statusUpdating,
+    auto429Probing,
     batchStatusUpdating,
     fileInputRef,
     loadFiles,
@@ -647,6 +691,7 @@ export function useAuthFilesData(): UseAuthFilesDataResult {
     handleDeleteAll,
     handleDownload,
     handleStatusToggle,
+    handleAuto429Probe,
     toggleSelect,
     selectAllVisible,
     invertVisibleSelection,
